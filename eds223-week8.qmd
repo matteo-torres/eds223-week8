@@ -1,0 +1,177 @@
+---
+title: "EDS 223: LAB 8"
+format: html
+editor_options: 
+  chunk_output_type: console
+---
+
+# Load packages
+
+```{r}
+library(terra)
+library(sf)
+library(tidyverse)
+library(here)
+library(tmap)
+```
+
+# Create a function for NDVI
+
+```{r}
+# functions should be defined first or stored in another script
+ndvi_fun <- function(nir, red) {
+  (nir - red)/(nir + red)
+}
+```
+
+```{r}
+```
+
+```{r}
+```
+
+# Compute NDVI for a single scene
+
+```{r}
+# Import June 12, 2018
+landsat_20180612 <- rast(here("data", "landsat_20180612.tif"))
+```
+
+```{r}
+# Update the names of the layers to match spectral bands
+names(landsat_20180612) <- c("blue", "green", "red", "NIR", "SWIR1", "SWIR2")
+```
+
+```{r}
+# Apply NDVI function for June 12, 2018
+ndvi_20180612 <- lapp(landsat_20180612[[c(4,3)]], fun = ndvi_fun)
+```
+
+```{r}
+tm_shape(ndvi_20180612) +
+  tm_raster(title = "NDVI") +
+  tm_layout(legend.outside = TRUE)
+```
+
+# Compute NDVI for all scenes
+
+```{r}
+# Clear environment
+rm(list = ls())  
+```
+
+```{r}
+# Define NDVI function
+ndvi_fun <- function(nir, red){
+  (nir - red) / (nir + red)
+}
+```
+
+```{r}
+# List all scenes
+files <- list.files(here("data"), pattern = "*.tif", full.names = TRUE)
+```
+
+```{r}
+create_ndvi_layer <- function(i) {
+  
+  # step 1: read in scene
+  landsat <- rast(files[i])
+  
+  # step 2: rename bands in scene
+  names(landsat) <- c("blue", "green", "red", "NIR", "SWIR1", "SWIR2")
+  
+  # step 3: comput ndvi
+  ndvi <- lapp(landsat[[c(4,3)]], fun = ndvi_fun)
+  
+  return(ndvi)
+}
+```
+
+```{r}
+all_ndvi <- c(create_ndvi_layer(1),
+              create_ndvi_layer(2),
+              create_ndvi_layer(3),
+              create_ndvi_layer(4),
+              create_ndvi_layer(5),
+              create_ndvi_layer(6),
+              create_ndvi_layer(7),
+              create_ndvi_layer(8))
+
+names(all_ndvi) <- c("2018-06-12",
+                     "2018-08-15",
+                     "2018-10-18",
+                     "2018-11-03",
+                     "2019-01-22",
+                     "2019-02-23",
+                     "2019-04-12",
+                     "2019-07-01")
+```
+
+```{r}
+file_names <- data.frame(file_name = files) %>%
+  mutate(date = str_sub(file_name, start = -12L, end = -5L))
+
+names(all_ndvi) <- file_names$date
+```
+
+# Compare NDVI across vegetation communities
+
+```{r}
+# Get data on vegetation communities
+sites <- st_read(here("data", "study_sites.shp"))
+```
+
+```{r}
+tm_shape(all_ndvi[[1]]) +
+  tm_raster() +
+tm_shape(sites) +
+  tm_polygons() +
+  tm_layout(legend.show = FALSE)
+```
+
+```{r}
+# Extract NDVI at study sites
+sites_ndvi <- terra::extract(all_ndvi, sites, fun = "mean")
+
+sites_annotated <- cbind(sites, sites_ndvi)
+```
+
+```{r}
+sites_clean <- sites_annotated %>%
+  # initial cleaning
+  select(-ID) %>%
+  st_drop_geometry() %>%
+  # reformat data frame
+  pivot_longer(!study_site) %>%
+  rename("NDVI" = value) %>%
+  # create date attribute
+  mutate("year" = str_sub(name, 2, 5),
+          "month" = str_sub(name, 6, 7),
+          "day" = str_sub(name, -2, -1)) %>%
+  # combine date elements
+  unite("date", 4:6, sep = "-") %>%
+  mutate("date" = lubridate::as_date(date)) %>%
+  select(-name) %>%
+  # rename combine study sites by vegetation type
+  mutate("veg_type" = case_when(study_site == "forest1" ~ "forest",
+                                study_site == "forest2" ~ "forest",
+                                study_site == "forest3" ~ "forest",
+                                study_site == "grassland" ~ "grassland",
+                                study_site == "chaparral" ~ "chaparral")) %>%
+  # summarize results by vegetation type
+  group_by(veg_type, date) %>%
+  summarize("NDVI" = mean(NDVI, na.rm = TRUE))
+```
+
+```{r}
+ggplot(data = sites_clean, aes(x = date, y = NDVI, col = veg_type)) +
+         geom_line() +
+         geom_point() +
+         theme_bw() +
+         labs(x = " ",
+              y = "Normalized Difference Vegetation Index",
+              col = "Vegetation type",
+              title = "Seasonal Cycle of Vegetation Productivity")
+```
+
